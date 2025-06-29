@@ -1,0 +1,92 @@
+---
+- name: Déployer Prometheus
+  hosts: monitoring
+  become: yes
+  vars_files:
+    - vars/global.yml
+  tasks:
+    - name: Créer le groupe prometheus
+      group:
+        name: prometheus
+        system: yes
+
+    - name: Créer l’utilisateur prometheus
+      user:
+        name: prometheus
+        shell: /usr/sbin/nologin
+        group: prometheus
+        system: yes
+
+    - name: Installer les prérequis
+      apt:
+        name:
+          - curl
+          - tar
+          - gzip
+        state: present
+        update_cache: yes
+
+    - name: Télécharger l’archive Prometheus
+      get_url:
+        url: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
+        dest: /tmp/prometheus.tar.gz
+        mode: "0644"
+
+    - name: Extraire Prometheus
+      unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Donner les droits à prometheus
+      file:
+        path: "/opt/prometheus-{{ prometheus_version }}.linux-amd64"
+        state: directory
+        recurse: yes
+        owner: prometheus
+        group: prometheus
+
+    - name: Copier la configuration
+      template:
+        src: templates/prometheus.yml.j2
+        dest: /etc/prometheus.yml
+        owner: prometheus
+        group: prometheus
+        mode: "0644"
+      notify: Restart Prometheus
+
+    - name: Créer le service systemd
+      copy:
+        dest: /etc/systemd/system/prometheus.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Prometheus
+          After=network.target
+
+          [Service]
+          User=prometheus
+          ExecStart=/opt/prometheus-{{ prometheus_version }}.linux-amd64/prometheus \
+            --config.file=/etc/prometheus.yml \
+            --storage.tsdb.path=/opt/prometheus-{{ prometheus_version }}.linux-amd64/data
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Reload systemd
+
+    - name: S’assurer que Prometheus est démarré
+      systemd:
+        name: prometheus
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Restart Prometheus
+      systemd:
+        name: prometheus
+        state: restarted
+        enabled: yes
